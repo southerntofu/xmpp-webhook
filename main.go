@@ -136,6 +136,7 @@ func main() {
 	xi := os.Getenv("XMPP_ID")
 	xp := os.Getenv("XMPP_PASS")
 	xr := os.Getenv("XMPP_RECIPIENTS")
+	xn := os.Getenv("XMPP_NICK")
 
 	skipTLSVerify := boolFromEnv("XMPP_SKIP_VERIFY", false)
 	useXMPPS := boolFromEnv("XMPP_OVER_TLS", true)
@@ -150,6 +151,9 @@ func main() {
 	// check if xmpp credentials and recipient list are supplied
 	if xi == "" || xp == "" || xr == "" {
 		log.Fatal("XMPP_ID, XMPP_PASS or XMPP_RECIPIENTS not set")
+	}
+	if xn == "" {
+		xn = "webhooks"
 	}
 
 	// Recipients now contains a list of succesfully-parsed JIDs, split by type (Accounts/Chatrooms)
@@ -255,7 +259,7 @@ func main() {
 					Message: stanza.Message{
 						To:   recipient.Value.(jid.JID),
 						From: myjid,
-						Type: stanza.ChatMessage,
+						Type: stanza.GroupChatMessage,
 					},
 					Body: m,
 				})
@@ -271,7 +275,7 @@ func main() {
 		mucClient := &muc.Client{}
 		//for recipient := range recipients.Chatrooms {
 		for recipient := recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
-			roomJID, _ := recipient.Value.(jid.JID).WithResource("webhooks")
+			roomJID, _ := recipient.Value.(jid.JID).WithResource(xn)
 			// TODO: debug log
 			log.Println("  Joining chatroom ", recipient.Value.(jid.JID))
 			opts := []muc.Option{muc.MaxBytes(0)}
