@@ -1,3 +1,9 @@
+github.com/savsgio/go-logger v1.0.0 h1:jiaRvohRr8RwtcK/WDcA/Yp4eaPaarAko3JNPzt1xoQ=
+github.com/savsgio/go-logger v1.0.0/go.mod h1:/ZzTTmB3JJqjZQcLlxTGbwy3fIsLUoYyldsSEL5rU2g=
+github.com/savsgio/go-logger/v2 v2.1.2 h1:XEDrrb3sDxyRKW5gpFRih+25mVRmFcGePB5CqBTN2lE=
+github.com/savsgio/go-logger/v2 v2.1.2/go.mod h1:fog+sZsg75Or4EENyd1jrS/Ps44s39hd6lccqALz0C8=
+github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=
+github.com/valyala/bytebufferpool v1.0.0/go.mod h1:6bBcMArwyJ5K/AmCkWv1jt77kVWyCJ6HpOuEn7z0Csc=
 golang.org/x/crypto v0.0.0-20180910181607-0e37d006457b/go.mod h1:6SG95UA2DQfeDnfUPMdvaQW0Q7yPrPDi9nlGo2tz2b4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190320223903-b7391e95e576/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=

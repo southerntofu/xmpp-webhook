@@ -5,13 +5,14 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/xml"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/savsgio/go-logger"
 	"github.com/tmsmr/xmpp-webhook/parser"
 	"mellium.im/sasl"
 	"mellium.im/xmlstream"
@@ -27,6 +28,15 @@ func panicOnErr(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+// Custom debug io.Writer for use within xmpp.StreamConfig
+type debugWriter struct{}
+
+func (e debugWriter) Write(p []byte) (int, error) {
+	line := string(p)
+	logger.Debug(line)
+	return len(p), nil
 }
 
 type MessageBody struct {
@@ -47,8 +57,7 @@ func parseRecipients(flatList string) Recipients {
 	chatrooms := list.New()
 
 	for _, r := range strings.Split(flatList, ",") {
-		// TODO: debug
-		//log.Println("Examining recipient ", r)
+		logger.Debugf("Examining recipient %q", r)
 
 		if strings.HasPrefix(r, "xmpp") {
 			xmppURI, err := uri.Parse(r)
@@ -59,7 +68,7 @@ func parseRecipients(flatList string) Recipients {
 			case "message":
 				accounts.PushBack(xmppURI.ToAddr)
 			default:
-				log.Fatalln("Could not parse XMPP URI: ", r, " (unknown action ", xmppURI.Action, ")")
+				panic(fmt.Sprintf("Could not parse XMPP URI: %q (unknown action %q)", r, xmppURI.Action))
 			}
 		} else {
 			recipient, err := jid.Parse(r)
@@ -85,20 +94,22 @@ func initXMPP(address jid.JID, pass string, skipTLSVerify bool, useXMPPS bool) (
 	}
 	conn, err := dialer.Dial(context.TODO(), "tcp", address)
 	if err != nil {
-		log.Println("Dial error to ", address)
+		logger.Errorf("Dial error to %q", address)
 		return nil, err
 	}
 	// we need the domain in the tls config if we want to verify the cert
 	if !skipTLSVerify {
 		tlsConfig.ServerName = address.Domainpart()
 	}
+
+	debugOutput := debugWriter{}
 	return xmpp.NewSession(
 		context.TODO(),
 		address.Domain(),
 		address,
 		conn,
 		0,
-		xmpp.NewNegotiator(xmpp.StreamConfig{Features: func(_ *xmpp.Session, f ...xmpp.StreamFeature) []xmpp.StreamFeature {
+		xmpp.NewNegotiator(xmpp.StreamConfig{TeeIn: debugOutput, TeeOut: debugOutput, Features: func(_ *xmpp.Session, f ...xmpp.StreamFeature) []xmpp.StreamFeature {
 			if f != nil {
 				return f
 			}
@@ -125,13 +136,32 @@ func boolFromEnv(key string, fallback bool) bool {
 	}
 	res, err := strconv.ParseBool(value)
 	if err != nil {
-		log.Println("ERROR: Failed to parse environment variable ", key, " (", value, ") as boolean, using default value (", fallback, ") instead")
+		logger.Errorf("Failed to parse environment variable %q (%q) as boolean, using default value (%q) instead", key, value, fallback)
 		return fallback
 	}
 	return res
 }
 
 func main() {
+	loglevel := os.Getenv("XMPP_LOGLEVEL")
+	if loglevel != "" {
+		// Default log level is INFO
+		switch strings.ToLower(loglevel) {
+		case "debug":
+			logger.SetLevel(logger.DEBUG)
+		case "info":
+			// Do nothing, already the default level
+		case "warning", "warn":
+			logger.SetLevel(logger.WARNING)
+		case "error":
+			logger.SetLevel(logger.ERROR)
+		case "fatal":
+			logger.SetLevel(logger.FATAL)
+		default:
+			panic(fmt.Sprintf("Wrong $XMPP_LOGLEVEL %q. Possible values: debug, info, warn, error, fatal", loglevel))
+		}
+	}
+
 	// get xmpp credentials, message recipients
 	xi := os.Getenv("XMPP_ID")
 	xp := os.Getenv("XMPP_PASS")
@@ -140,7 +170,7 @@ func main() {
 
 	skipTLSVerify := boolFromEnv("XMPP_SKIP_VERIFY", false)
 	useXMPPS := boolFromEnv("XMPP_OVER_TLS", true)
-	log.Println("XMPPS: ", useXMPPS, ", Skip Verification: ", skipTLSVerify)
+	logger.Infof("DirectTLS: %t, Skip TLS Verification: %t", useXMPPS, skipTLSVerify)
 
 	// get listen address
 	listenAddress := os.Getenv("XMPP_WEBHOOK_LISTEN_ADDRESS")
@@ -150,7 +180,7 @@ func main() {
 
 	// check if xmpp credentials and recipient list are supplied
 	if xi == "" || xp == "" || xr == "" {
-		log.Fatal("XMPP_ID, XMPP_PASS or XMPP_RECIPIENTS not set")
+		logger.Fatal("XMPP_ID, XMPP_PASS or XMPP_RECIPIENTS not set")
 	}
 	if xn == "" {
 		xn = "webhooks"
@@ -163,27 +193,21 @@ func main() {
 	panicOnErr(err)
 
 	// connect to xmpp server
-	log.Printf("Starting XMPP session")
+	logger.Debugf("Starting XMPP session")
 	xmppSession, err := initXMPP(myjid, xp, skipTLSVerify, useXMPPS)
 	panicOnErr(err)
 	defer closeXMPP(xmppSession)
-	log.Printf("Established session")
+	logger.Infof("Established XMPP session")
 
 	// send initial presence
 	panicOnErr(xmppSession.Send(context.TODO(), stanza.Presence{Type: stanza.AvailablePresence}.Wrap(nil)))
-	log.Printf("Sent initial presence")
+	logger.Debugf("Sent initial presence")
 
 	// listen for messages and echo them
 	go func() {
 		err = xmppSession.Serve(xmpp.HandlerFunc(func(t xmlstream.TokenReadEncoder, start *xml.StartElement) error {
 			d := xml.NewTokenDecoder(xmlstream.MultiReader(xmlstream.Token(*start), t))
 			d.Token()
-
-			// TODO: How to display raw XML from the received request?
-			//raw, _ := xml.Marshal(start)
-			//log.Println("  IN: ", string(raw))
-			//log.Printf("  IN: %+v", start)
-			log.Printf("  IN: %q", start)
 
 			// ignore elements that aren't messages
 			if start.Name.Local != "message" {
@@ -193,7 +217,7 @@ func main() {
 			msg := MessageBody{}
 			err = d.DecodeElement(&msg, start)
 			if err != nil && err != io.EOF {
-				log.Printf("Error decoding message: %q", err)
+				logger.Errorf("Error decoding ChatMessage: %q", err)
 				return nil
 			}
 
@@ -201,9 +225,9 @@ func main() {
 			case stanza.ErrorMessage:
 				errStanza, err := stanza.UnmarshalError(t)
 				if err != nil && err != io.EOF {
-					log.Printf("Error decoding message: %q", err)
+					logger.Errorf("Error decoding ErrorMessage: %q", err)
 				} else {
-					log.Printf("Received error from XMPP: %q", errStanza)
+					logger.Errorf("Received error from XMPP: %q", errStanza)
 				}
 				return nil
 			case stanza.ChatMessage:
@@ -251,7 +275,7 @@ func main() {
 					Body: m,
 				})
 				if err != nil {
-					log.Println("Received error when sending notification to account ", recipient, ": \n", err)
+					logger.Errorf("Could not send notification to %q: \n%q", recipient, err)
 				}
 			}
 			for recipient := recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
@@ -264,29 +288,36 @@ func main() {
 					Body: m,
 				})
 				if err != nil {
-					log.Println("Received error when sending notification to chatroom ", recipient.Value, ": \n", err)
+					logger.Errorf("Could not send chatroom notification to %q:\n%q", recipient.Value, err)
 				}
 			}
 		}
 	}()
 
 	go func() {
-		log.Printf("Now joining XMPP chatrooms...")
+		success := true
+		logger.Infof("Joining XMPP chatrooms...")
 		mucClient := &muc.Client{}
-		//for recipient := range recipients.Chatrooms {
 		for recipient := recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
 			roomJID, _ := recipient.Value.(jid.JID).WithResource(xn)
-			// TODO: debug log
-			log.Println("  Joining chatroom ", recipient.Value.(jid.JID))
+			logger.Debugf("Joining chatroom %q", recipient.Value.(jid.JID))
 			opts := []muc.Option{muc.MaxBytes(0)}
 			_, err = mucClient.Join(context.TODO(), roomJID, xmppSession, opts...)
 			if err != nil {
-				log.Fatalf("  Error joining MUC %s: %v", roomJID, err)
+				success = false
+				logger.Errorf("Could not join MUC %s: %v", roomJID, err)
 			}
+		}
+		// TODO: Why are we never reaching this part? What produces the blocking?
+		if success {
+			logger.Infof("Joined chatrooms successfully.")
+		} else {
+			// TODO: How to keep track of failed rooms and try them again regularly?
+			logger.Warningf("Failed to join one or more chatrooms (see logs above).")
 		}
 	}()
 
-	log.Printf("Starting HTTP server")
+	logger.Infof("Starting HTTP server")
 
 	// initialize handlers with associated parser functions
 	http.Handle("/grafana", newMessageHandler(messages, parser.GrafanaParserFunc))
