@@ -54,7 +54,7 @@ fi
 echo "Syncing $SOURCE to $XMPP_REMOTE"
 
 if [ ${EDIT} -eq "1" ]; then
-    vim main.go && go build && go fmt && scp $SOURCE $XMPP_REMOTE
+    vim $SOURCE && go fmt && go build && scp $SOURCE $XMPP_REMOTE
 else
-    go build && go fmt && scp $SOURCE $XMPP_REMOTE
+    go fmt && go build && scp $SOURCE $XMPP_REMOTE
 fi
