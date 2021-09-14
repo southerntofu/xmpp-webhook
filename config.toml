@@ -1,0 +1,9 @@
+jid = "foo@bar"
+password = "FOOBAR"
+nick = "webhooks"
+recipients = [ "xmpp:foo@baz?join" ]
+directtls = true
+veritytls = true
+loglevel = "info"
+[webhooks]
+listen = "localhost:4321"

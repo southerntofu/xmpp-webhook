@@ -41,11 +41,11 @@ type MessageBody struct {
 	Body string `xml:"body",omitempty`
 }
 
-func initXMPP(config config.Config) (*xmpp.Session, error) {
-	skipTLSVerify := !config.VerifyTLS
-	useXMPPS := config.DirectTLS
-	address := config.JID
-	pass := config.Password
+func initXMPP(conf config.Config) (*xmpp.Session, error) {
+	skipTLSVerify := !conf.VerifyTLS
+	useXMPPS := conf.DirectTLS
+	address := conf.JID
+	pass := conf.Password
 	tlsConfig := tls.Config{InsecureSkipVerify: skipTLSVerify}
 	var dialer dial.Dialer
 	// only use the tls config for the dialer if necessary
@@ -90,12 +90,21 @@ func closeXMPP(session *xmpp.Session) {
 }
 
 func main() {
-	config := config.FromEnv()
-	logger.Infof("Starting xmpp-webhook as %q (DirectTLS: %t, VerifyTLS: %t) to serve on %q", config.JID, config.DirectTLS, config.VerifyTLS, config.WebhookListen)
+	found, conf, err := config.FromTOMLFile("config.toml")
+	// If the conf file exists, but cannot be parsed, panic!
+	// If the conf file does not exist, parse from config
+	if !found {
+		conf = config.FromEnv()
+	} else {
+		if err != nil {
+			panicOnErr(err)
+		}
+	}
+	logger.Infof("Starting xmpp-webhook as %q (DirectTLS: %t, VerifyTLS: %t) to serve on %q", conf.JID, conf.DirectTLS, conf.VerifyTLS, conf.WebhookListen)
 
 	// connect to xmpp server
 	logger.Debugf("Starting XMPP session")
-	xmppSession, err := initXMPP(config)
+	xmppSession, err := initXMPP(conf)
 	panicOnErr(err)
 	defer closeXMPP(xmppSession)
 	logger.Infof("Established XMPP session")
@@ -139,7 +148,7 @@ func main() {
 				reply := MessageBody{
 					Message: stanza.Message{
 						To:   msg.From.Bare(),
-						From: config.JID,
+						From: conf.JID,
 						Type: stanza.ChatMessage,
 					},
 					Body: msg.Body,
@@ -166,11 +175,11 @@ func main() {
 	// wait for messages from the webhooks and send them to all recipients
 	go func() {
 		for m := range messages {
-			for recipient := config.Recipients.Accounts.Front(); recipient != nil; recipient = recipient.Next() {
+			for recipient := conf.Recipients.Accounts.Front(); recipient != nil; recipient = recipient.Next() {
 				err = xmppSession.Encode(ctx, MessageBody{
 					Message: stanza.Message{
 						To:   recipient.Value.(jid.JID),
-						From: config.JID,
+						From: conf.JID,
 						Type: stanza.ChatMessage,
 					},
 					Body: m,
@@ -179,11 +188,11 @@ func main() {
 					logger.Errorf("Could not send notification to %q: \n%q", recipient, err)
 				}
 			}
-			for recipient := config.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
+			for recipient := conf.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
 				err = xmppSession.Encode(ctx, MessageBody{
 					Message: stanza.Message{
 						To:   recipient.Value.(jid.JID),
-						From: config.JID,
+						From: conf.JID,
 						Type: stanza.GroupChatMessage,
 					},
 					Body: m,
@@ -199,8 +208,8 @@ func main() {
 		success := true
 		logger.Infof("Joining XMPP chatrooms...")
 		mucClient := &muc.Client{}
-		for recipient := config.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
-			roomJID, _ := recipient.Value.(jid.JID).WithResource(config.Nick)
+		for recipient := conf.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
+			roomJID, _ := recipient.Value.(jid.JID).WithResource(conf.Nick)
 			logger.Debugf("Joining chatroom %q", recipient.Value.(jid.JID))
 			opts := []muc.Option{muc.MaxBytes(0)}
 			_, err = mucClient.Join(context.TODO(), roomJID, xmppSession, opts...)
@@ -225,9 +234,9 @@ func main() {
 	logger.Infof("Starting HTTP server")
 
 	// initialize handlers with associated parser functions
-	http.Handle("/grafana", newMessageHandler(messages, parser.GrafanaParserFunc, config))
+	http.Handle("/grafana", newMessageHandler(messages, parser.GrafanaParserFunc, conf))
 	//http.Handle("/slack", newMessageHandler(messages, parser.SlackParserFunc, config))
-	http.Handle("/alertmanager", newMessageHandler(messages, parser.AlertmanagerParserFunc, config))
+	http.Handle("/alertmanager", newMessageHandler(messages, parser.AlertmanagerParserFunc, conf))
 
 	// So apparently in golang to handle dynamic functions you need to call http.HandleFunc
 	//http.Handle("/slack/", newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, config))
@@ -235,10 +244,10 @@ func main() {
 	// NOPE: http.HandleFunc("/slack/", handler.parserFunc.(func(http.ResponseWriter, *http.Request)))
 
 	// Cannot use lambda function because we need config context... Or can we?
-	handler := newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, config)
+	handler := newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, conf)
 	// NOTE: Don't append a trailing slash, because then the route will match but req.Body will be empty! (WTF)
 	http.HandleFunc("/slack", func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) })
 
 	// listen for requests
-	_ = http.ListenAndServe(config.WebhookListen, nil)
+	_ = http.ListenAndServe(conf.WebhookListen, nil)
 }

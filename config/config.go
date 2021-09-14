@@ -3,11 +3,12 @@ package config
 import (
 	"container/list"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
 
-	//"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/savsgio/go-logger"
 	"mellium.im/xmpp/jid"
 	"mellium.im/xmpp/uri"
@@ -15,9 +16,9 @@ import (
 
 // TODO: figure out how to **not** duplicate it without making a mess of golang modules
 func panicOnErr(err error) {
-    if err != nil {
-        panic(err)
-    }
+	if err != nil {
+		panic(err)
+	}
 }
 
 type Config struct {
@@ -29,7 +30,7 @@ type Config struct {
 	VerifyTLS        bool   `omitempty`
 	WebhookListen    string
 	WebhookUseSecret bool `omitempty`
-	//WebhookSecret    string `omitempty`
+	//WebhookSecret	string `omitempty`
 	Recipients Recipients
 	Pipelines  map[string]Pipeline
 }
@@ -94,8 +95,6 @@ func boolFromEnv(key string, fallback bool) bool {
 	}
 	return res
 }
-
-
 
 func LogLevelFromString(loglevel string) string {
 	if loglevel != "" {
@@ -178,9 +177,37 @@ func FromEnv() Config {
 		VerifyTLS:        VerifyTLS,
 		WebhookListen:    Listen,
 		WebhookUseSecret: UseSecret,
-		//WebhookSecret:    Secret,
+		//WebhookSecret:	Secret,
 		// TODO: Move Recipients to Pipelines
 		Recipients: Recipients,
 		Pipelines:  Pipelines,
 	}
+}
+
+// Parse the configuration from a given TOML file path
+func FromTOMLFile(path string) (bool, Config, error) {
+	if _, err := os.Stat(path); err == nil {
+		// File exists, try to read it and parse as Config from TOML
+		content, err2 := ioutil.ReadFile(path)
+		if err2 != nil {
+			return true, Config{}, err2
+			//logger.Fatal(err2)
+		}
+		conf, err3 := FromTOML(string(content))
+		return true, conf, err3
+	} else if os.IsNotExist(err) {
+		// File does not exist, return false
+		return false, Config{}, nil
+	} else {
+		// File exists but cannot be read (maybe permissions problem?)
+		// Return the IO error
+		return true, Config{}, err
+	}
+}
+
+// Parse the configuration from a given TOML string
+func FromTOML(content string) (Config, error) {
+	config := Config{}
+	err := toml.Unmarshal([]byte(content), &config)
+	return config, err
 }
