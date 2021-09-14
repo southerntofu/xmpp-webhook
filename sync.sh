@@ -48,13 +48,13 @@ if [ $# -ge 1 ]; then
         exit 1
     fi
 else
-    SOURCE="main.go"
+    SOURCE="${SOURCE-main.go}"
 fi
     
 echo "Syncing $SOURCE to $XMPP_REMOTE"
 
 if [ ${EDIT} -eq "1" ]; then
-    vim $SOURCE && go fmt && go build && scp $SOURCE $XMPP_REMOTE
+    vim $SOURCE && go fmt && go build && scp $SOURCE $XMPP_REMOTE/$SOURCE
 else
-    go fmt && go build && scp $SOURCE $XMPP_REMOTE
+    go fmt && go build && scp $SOURCE $XMPP_REMOTE/$SOURCE
 fi
