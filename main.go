@@ -1,19 +1,17 @@
 package main
 
 import (
-	"container/list"
+	"github.com/tmsmr/xmpp-webhook/config"
+	"github.com/tmsmr/xmpp-webhook/parser"
+
 	"context"
 	"crypto/tls"
 	"encoding/xml"
-	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
-	"strings"
 
+	//"github.com/pelletier/go-toml/v2"
 	"github.com/savsgio/go-logger"
-	"github.com/tmsmr/xmpp-webhook/parser"
 	"mellium.im/sasl"
 	"mellium.im/xmlstream"
 	"mellium.im/xmpp"
@@ -21,7 +19,6 @@ import (
 	"mellium.im/xmpp/jid"
 	"mellium.im/xmpp/muc"
 	"mellium.im/xmpp/stanza"
-	"mellium.im/xmpp/uri"
 )
 
 func panicOnErr(err error) {
@@ -44,46 +41,11 @@ type MessageBody struct {
 	Body string `xml:"body",omitempty`
 }
 
-type Recipients struct {
-	Accounts  *list.List
-	Chatrooms *list.List
-}
-
-// Take a list of comma separated entries, and produce Jids from it.
-// Fail hard on an unparsable entry. If the entry starts with xmpp:
-// it's parsed as XMPP URI, otherwise it's parsed directly as JID
-func parseRecipients(flatList string) Recipients {
-	accounts := list.New()
-	chatrooms := list.New()
-
-	for _, r := range strings.Split(flatList, ",") {
-		logger.Debugf("Examining recipient %q", r)
-
-		if strings.HasPrefix(r, "xmpp") {
-			xmppURI, err := uri.Parse(r)
-			panicOnErr(err)
-			switch xmppURI.Action {
-			case "join":
-				chatrooms.PushBack(xmppURI.ToAddr)
-			case "message":
-				accounts.PushBack(xmppURI.ToAddr)
-			default:
-				panic(fmt.Sprintf("Could not parse XMPP URI: %q (unknown action %q)", r, xmppURI.Action))
-			}
-		} else {
-			recipient, err := jid.Parse(r)
-			panicOnErr(err)
-			accounts.PushBack(recipient)
-		}
-	}
-
-	return Recipients{
-		Accounts:  accounts,
-		Chatrooms: chatrooms,
-	}
-}
-
-func initXMPP(address jid.JID, pass string, skipTLSVerify bool, useXMPPS bool) (*xmpp.Session, error) {
+func initXMPP(config config.Config) (*xmpp.Session, error) {
+	skipTLSVerify := !config.VerifyTLS
+	useXMPPS := config.DirectTLS
+	address := config.JID
+	pass := config.Password
 	tlsConfig := tls.Config{InsecureSkipVerify: skipTLSVerify}
 	var dialer dial.Dialer
 	// only use the tls config for the dialer if necessary
@@ -127,74 +89,13 @@ func closeXMPP(session *xmpp.Session) {
 	_ = session.Conn().Close()
 }
 
-// Parse an environment variable "key" as boolean,
-// or return "fallback" otherwise. Cannot fail.
-func boolFromEnv(key string, fallback bool) bool {
-	value, exists := os.LookupEnv(key)
-	if !exists {
-		return fallback
-	}
-	res, err := strconv.ParseBool(value)
-	if err != nil {
-		logger.Errorf("Failed to parse environment variable %q (%q) as boolean, using default value (%q) instead", key, value, fallback)
-		return fallback
-	}
-	return res
-}
-
 func main() {
-	loglevel := os.Getenv("XMPP_LOGLEVEL")
-	if loglevel != "" {
-		// Default log level is INFO
-		switch strings.ToLower(loglevel) {
-		case "debug":
-			logger.SetLevel(logger.DEBUG)
-		case "info":
-			// Do nothing, already the default level
-		case "warning", "warn":
-			logger.SetLevel(logger.WARNING)
-		case "error":
-			logger.SetLevel(logger.ERROR)
-		case "fatal":
-			logger.SetLevel(logger.FATAL)
-		default:
-			panic(fmt.Sprintf("Wrong $XMPP_LOGLEVEL %q. Possible values: debug, info, warn, error, fatal", loglevel))
-		}
-	}
-
-	// get xmpp credentials, message recipients
-	xi := os.Getenv("XMPP_ID")
-	xp := os.Getenv("XMPP_PASS")
-	xr := os.Getenv("XMPP_RECIPIENTS")
-	xn := os.Getenv("XMPP_NICK")
-
-	skipTLSVerify := boolFromEnv("XMPP_SKIP_VERIFY", false)
-	useXMPPS := boolFromEnv("XMPP_OVER_TLS", true)
-	logger.Infof("DirectTLS: %t, Skip TLS Verification: %t", useXMPPS, skipTLSVerify)
-
-	// get listen address
-	listenAddress := os.Getenv("XMPP_WEBHOOK_LISTEN_ADDRESS")
-	if len(listenAddress) == 0 {
-		listenAddress = ":4321"
-	}
-
-	// check if xmpp credentials and recipient list are supplied
-	if xi == "" || xp == "" || xr == "" {
-		logger.Fatal("XMPP_ID, XMPP_PASS or XMPP_RECIPIENTS not set")
-	}
-	if xn == "" {
-		xn = "webhooks"
-	}
-
-	// Recipients now contains a list of succesfully-parsed JIDs, split by type (Accounts/Chatrooms)
-	recipients := parseRecipients(xr)
-
-	myjid, err := jid.Parse(xi)
-	panicOnErr(err)
+	config := config.FromEnv()
+	logger.Infof("Starting xmpp-webhook as %q (DirectTLS: %t, VerifyTLS: %t) to serve on %q", config.JID, config.DirectTLS, config.VerifyTLS, config.WebhookListen)
 
 	// connect to xmpp server
 	logger.Debugf("Starting XMPP session")
-	xmppSession, err := initXMPP(myjid, xp, skipTLSVerify, useXMPPS)
+	xmppSession, err := initXMPP(config)
 	panicOnErr(err)
 	defer closeXMPP(xmppSession)
 	logger.Infof("Established XMPP session")
@@ -238,7 +139,7 @@ func main() {
 				reply := MessageBody{
 					Message: stanza.Message{
 						To:   msg.From.Bare(),
-						From: myjid,
+						From: config.JID,
 						Type: stanza.ChatMessage,
 					},
 					Body: msg.Body,
@@ -265,11 +166,11 @@ func main() {
 	// wait for messages from the webhooks and send them to all recipients
 	go func() {
 		for m := range messages {
-			for recipient := recipients.Accounts.Front(); recipient != nil; recipient = recipient.Next() {
+			for recipient := config.Recipients.Accounts.Front(); recipient != nil; recipient = recipient.Next() {
 				err = xmppSession.Encode(ctx, MessageBody{
 					Message: stanza.Message{
 						To:   recipient.Value.(jid.JID),
-						From: myjid,
+						From: config.JID,
 						Type: stanza.ChatMessage,
 					},
 					Body: m,
@@ -278,11 +179,11 @@ func main() {
 					logger.Errorf("Could not send notification to %q: \n%q", recipient, err)
 				}
 			}
-			for recipient := recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
+			for recipient := config.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
 				err = xmppSession.Encode(ctx, MessageBody{
 					Message: stanza.Message{
 						To:   recipient.Value.(jid.JID),
-						From: myjid,
+						From: config.JID,
 						Type: stanza.GroupChatMessage,
 					},
 					Body: m,
@@ -298,8 +199,8 @@ func main() {
 		success := true
 		logger.Infof("Joining XMPP chatrooms...")
 		mucClient := &muc.Client{}
-		for recipient := recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
-			roomJID, _ := recipient.Value.(jid.JID).WithResource(xn)
+		for recipient := config.Recipients.Chatrooms.Front(); recipient != nil; recipient = recipient.Next() {
+			roomJID, _ := recipient.Value.(jid.JID).WithResource(config.Nick)
 			logger.Debugf("Joining chatroom %q", recipient.Value.(jid.JID))
 			opts := []muc.Option{muc.MaxBytes(0)}
 			_, err = mucClient.Join(context.TODO(), roomJID, xmppSession, opts...)
@@ -309,6 +210,10 @@ func main() {
 			}
 		}
 		// TODO: Why are we never reaching this part? What produces the blocking?
+		// Apparently, muc.Client.Join blocks until the server's answer is received,
+		// However since we're in a difference coroutine (reusing the same XMPP session)
+		// We're never receiving it. Here we should either have a dedicated session or a muxer,
+		// Or we should run MUC joins from the same coroutine that established the session.
 		if success {
 			logger.Infof("Joined chatrooms successfully.")
 		} else {
@@ -320,10 +225,20 @@ func main() {
 	logger.Infof("Starting HTTP server")
 
 	// initialize handlers with associated parser functions
-	http.Handle("/grafana", newMessageHandler(messages, parser.GrafanaParserFunc))
-	http.Handle("/slack", newMessageHandler(messages, parser.SlackParserFunc))
-	http.Handle("/alertmanager", newMessageHandler(messages, parser.AlertmanagerParserFunc))
+	http.Handle("/grafana", newMessageHandler(messages, parser.GrafanaParserFunc, config))
+	//http.Handle("/slack", newMessageHandler(messages, parser.SlackParserFunc, config))
+	http.Handle("/alertmanager", newMessageHandler(messages, parser.AlertmanagerParserFunc, config))
+
+	// So apparently in golang to handle dynamic functions you need to call http.HandleFunc
+	//http.Handle("/slack/", newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, config))
+	//handler := newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, config)
+	// NOPE: http.HandleFunc("/slack/", handler.parserFunc.(func(http.ResponseWriter, *http.Request)))
+
+	// Cannot use lambda function because we need config context... Or can we?
+	handler := newPlaintextSecretHandler(messages, parser.SlackParse, parser.SlackValidate, config)
+	// NOTE: Don't append a trailing slash, because then the route will match but req.Body will be empty! (WTF)
+	http.HandleFunc("/slack", func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) })
 
 	// listen for requests
-	_ = http.ListenAndServe(listenAddress, nil)
+	_ = http.ListenAndServe(config.WebhookListen, nil)
 }

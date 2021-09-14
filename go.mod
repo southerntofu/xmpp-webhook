@@ -1,8 +1,10 @@
 module github.com/tmsmr/xmpp-webhook
 
 require (
+	github.com/pelletier/go-toml/v2 v2.0.0-beta.3 // indirect
 	github.com/savsgio/go-logger v1.0.0
-	github.com/savsgio/go-logger/v2 v2.1.2 // indirect
+	github.com/tmsmr/xmpp-webhook/config v0.0.0-00010101000000-000000000000
+	github.com/tmsmr/xmpp-webhook/parser v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83 // indirect
 	golang.org/x/net v0.0.0-20210226172049-e18ecbb05110 // indirect
 	golang.org/x/text v0.3.5 // indirect
@@ -12,3 +14,7 @@ require (
 )
 
 go 1.15
+
+replace github.com/tmsmr/xmpp-webhook/parser => ./parser
+
+replace github.com/tmsmr/xmpp-webhook/config => ./config
